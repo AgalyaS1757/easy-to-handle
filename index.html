@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>📊 easy-to-handle Dashboard</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f7f7f7;
+      padding: 2em;
+      text-align: center;
+    }
+    h1 {
+      color: #222;
+      font-size: 2em;
+    }
+    input, select {
+      padding: 10px;
+      margin: 10px;
+    }
+    table {
+      margin: 2em auto;
+      border-collapse: collapse;
+      width: 95%;
+      background: #fff;
+      box-shadow: 0 0 8px rgba(0,0,0,0.1);
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: left;
+    }
+    th {
+      background: #007bff;
+      color: white;
+    }
+    canvas {
+      max-width: 90%;
+      margin: 2em auto;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+  <!-- Chart.js + JSZip -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+
+<h1>📦 Upload ZIP Dataset</h1>
+<input type="file" id="uploadZIP" accept=".zip" />
+<br>
+<label for="chartType">Chart Type:</label>
+<select id="chartType">
+  <option value="bar">📊 Bar</option>
+  <option value="line">📈 Line</option>
+  <option value="pie">🥧 Pie</option>
+  <option value="histogram">📉 Histogram</option>
+</select>
+
+<div id="summary"></div>
+<table id="dataTable" class="hidden"></table>
+<canvas id="chart" class="hidden"></canvas>
+
+<script>
+  const firebaseConfig = {
+    apiKey: "AIzaSyC7r2p9gVrnvJkcMnLWVsf-83qVJf7uBIo",
+    authDomain: "easy-to-handle0.firebaseapp.com",
+    projectId: "easy-to-handle0",
+    storageBucket: "easy-to-handle0.appspot.com",
+    messagingSenderId: "167698011795",
+    appId: "1:167698011795:web:f4df87d37f88296bdd1f66",
+    measurementId: "G-P5CRNJ6LBX"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+</script>
+
+<script>
+let globalRows = [], globalKeys = [];
+
+async function parseFile(file) {
+  const zip = await JSZip.loadAsync(file);
+  const supported = ['.csv', '.json', '.txt'];
+  const valid = Object.values(zip.files).filter(f =>
+    supported.some(ext => f.name.endsWith(ext))
+  );
+  if (!valid.length) return alert("❌ No supported files found inside ZIP");
+
+  const fileToRead = valid[0];
+  const content = await fileToRead.async("string");
+  document.getElementById("summary").innerHTML = `✅ Loaded: <b>${fileToRead.name}</b>`;
+  db.collection("uploads").add({ filename: fileToRead.name, timestamp: new Date() });
+
+  let rows = [];
+  if (fileToRead.name.endsWith(".json")) {
+    const json = JSON.parse(content);
+    rows = Array.isArray(json) ? json : Object.values(json);
+  } else {
+    const lines = content.trim().split("\n");
+    const headers = lines[0].split(",");
+    rows = lines.slice(1).map(line => {
+      const values = line.split(",");
+      const obj = {};
+      headers.forEach((h, i) => obj[h.trim()] = values[i]?.trim());
+      return obj;
+    });
+  }
+  return rows;
+}
+
+function showTable(rows) {
+  const keys = Object.keys(rows[0]);
+  const table = document.getElementById("dataTable");
+  table.innerHTML = `<thead><tr>${keys.map(k => `<th>${k}</th>`).join("")}</tr></thead>`;
+  table.innerHTML += `<tbody>${rows.map(row => `<tr>${keys.map(k => `<td>${row[k]}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  table.classList.remove("hidden");
+}
+
+function showChart(rows, type) {
+  const keys = Object.keys(rows[0]);
+  const numericKeys = keys.filter(k => !isNaN(parseFloat(rows[0][k])));
+
+  const ctx = document.getElementById("chart").getContext("2d");
+  if (window.liveChart) window.liveChart.destroy();
+
+  if (!numericKeys.length) return alert("❌ No numeric data to chart");
+
+  const labels = rows.map((r, i) => `Row ${i + 1}`);
+  const datasets = numericKeys.map((key, i) => ({
+    label: key,
+    data: rows.map(r => parseFloat(r[key]) || 0),
+    backgroundColor: `hsl(${(i * 60) % 360}, 70%, 60%)`
+  }));
+
+  let chartData, options = { responsive: true };
+
+  if (type === "pie") {
+    const labelKey = keys.find(k => isNaN(parseFloat(rows[0][k]))) || "Label";
+    chartData = {
+      labels: rows.map(r => r[labelKey] || `Row`),
+      datasets: [{
+        label: "Pie",
+        data: rows.map(r => parseFloat(r[numericKeys[0]]) || 0),
+        backgroundColor: rows.map((_, i) => `hsl(${i * 45}, 70%, 60%)`)
+      }]
+    };
+    options.plugins = { title: { display: true, text: `Pie Chart by ${labelKey}` } };
+  } else if (type === "histogram") {
+    const key = numericKeys[0];
+    const values = rows.map(r => parseFloat(r[key]) || 0).filter(v => !isNaN(v));
+    const bins = Array(10).fill(0);
+    const max = Math.max(...values);
+    const min = Math.min(...values);
+    const step = (max - min) / 10;
+    values.forEach(v => {
+      const index = Math.min(9, Math.floor((v - min) / step));
+      bins[index]++;
+    });
+    chartData = {
+      labels: bins.map((_, i) => `${(min + i * step).toFixed(1)}-${(min + (i + 1) * step).toFixed(1)}`),
+      datasets: [{ label: `Histogram of ${key}`, data: bins, backgroundColor: "#42a5f5" }]
+    };
+  } else {
+    chartData = { labels, datasets };
+  }
+
+  window.liveChart = new Chart(ctx, {
+    type: type === "histogram" ? "bar" : type,
+    data: chartData,
+    options
+  });
+
+  document.getElementById("chart").classList.remove("hidden");
+}
+
+document.getElementById("uploadZIP").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const rows = await parseFile(file);
+  if (!rows.length) return alert("No rows in file");
+  globalRows = rows;
+  globalKeys = Object.keys(rows[0]);
+  showTable(rows);
+  showChart(rows, document.getElementById("chartType").value);
+});
+
+document.getElementById("chartType").addEventListener("change", () => {
+  if (globalRows.length) {
+    showChart(globalRows, document.getElementById("chartType").value);
+  }
+});
+</script>
+ <!-- ✅ CSS External -->
+  <link rel="stylesheet" href="style.css">
+
+  <!-- ✅ Chart.js and JSZip CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</body>
+</html>
+
+
